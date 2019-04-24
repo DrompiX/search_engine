@@ -7,6 +7,7 @@ from collections import Counter
 
 from search_engine import indexing
 from search_engine import spell_checking
+from search_engine.doc_sum import naive_sum
 from search_engine.utils import *
 
 path_prefix = 'search_engine/data.nosync/'
@@ -42,12 +43,46 @@ class SearchEngine(object):
         self.index_built = True
         pass
 
-    def answer_query(self, raw_query, top_k, scoring='okapi'):
+    def _handle_wildcards(self, raw_query):
+        for word in tokenize(raw_query.lower()):
+            if word.find('*') != -1:
+                return spell_checking.generate_wildcard_options(word, self.k_gram_index)
+        return []
+    
+    def _handle_soundex(self, query):
+        errors = {}
+        for word in query:
+            if word not in self.inv_index:
+                word_code = spell_checking.produce_soundex_code(word)
+                if word_code in self.soundex_index:
+                    for corr in self.soundex_index[word_code]:
+                        if word in errors:
+                            errors[word].append(corr)
+                        else:
+                            errors[word] = [corr]
+        
+        return errors
+
+    def answer_query(self, raw_query, top_k, scoring='okapi', summary_len=5):
         scoring =  self._cosine_scoring if scoring == 'cosine' else self._okapi_scoring
         query = preprocess(raw_query)
         # count frequency
         query = Counter(query)
         # retrieve all scores
+
+        wcs = self._handle_wildcards(raw_query)
+        if len(wcs) != 0:
+            print('\033[92mDid you mean:\033[0m')
+            print(*wcs, sep=', ', end='?')
+            return []
+        
+        sx = self._handle_soundex(query)
+        if len(sx) != 0:
+            print('\033[92mPossible soundex fixes:\033[0m')
+            for w, corr in sx.items():
+                print(f'{w} -> ', end='')
+                print(*corr, sep=', ')
+
         scores = scoring(query)
         # put them in heapq data structure, to allow convenient extraction of top k elements
         h = []
@@ -62,7 +97,7 @@ class SearchEngine(object):
         for k in range(top_k):
             best_so_far = heapq.heappop(h)
             top_k_ids.append(best_so_far)
-            article = self.documents[best_so_far[1]]
+            article = naive_sum(self.documents[best_so_far[1]], raw_query, summary_len)
             article_terms = tokenize(article)
             intersection = [t for t in article_terms if is_apt_word(t) and stem(t, ps) in query.keys()]
             for term in intersection:  # highlight terms for visual evaluation

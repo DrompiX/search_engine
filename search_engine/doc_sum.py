@@ -31,7 +31,7 @@ def get_text_sentences(text):
     return sentences
 
 
-def naive_sum(doc, query, sentence_cnt):
+def naive_sum(doc, query, sentence_cnt, is_raw=False):
     '''Implementaion of naive text summarization
     
     Idea is to take document data, preprocess it, divide into
@@ -50,8 +50,10 @@ def naive_sum(doc, query, sentence_cnt):
     '''
     sentences = get_text_sentences(doc)
     # calculating number of term occurences in query and text
-    # TODO: check stemming difference
-    q_tf = Counter(preprocess(query))
+    if is_raw:
+        q_tf = Counter(preprocess(query))
+    else:
+        q_tf = query
     tf = Counter(preprocess(doc))
 
     # normalizing tf on maximum tf
@@ -63,13 +65,14 @@ def naive_sum(doc, query, sentence_cnt):
     score_results = {}
     for sentence in sentences:
         for term in preprocess(sentence):
-            if sentence in score_results:
-                score_results[sentence] += tf[term] * q_tf[term]
-            else:
-                score_results[sentence] = tf[term] * q_tf[term]
+            if term in tf and term in q_tf:
+                if sentence in score_results:
+                    score_results[sentence] += tf[term] * q_tf[term]
+                else:
+                    score_results[sentence] = tf[term] * q_tf[term]
     
     score_results = sorted(score_results.items(), key=lambda kv: kv[1], reverse=True)
     result = []
-    for i in range(min(len(sentences), sentence_cnt)):
+    for i in range(min(len(score_results), sentence_cnt)):
         result.append(score_results[i][0] + ' ')
     return ''.join(result)

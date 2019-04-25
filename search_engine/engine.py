@@ -3,10 +3,15 @@ import pickle
 import math
 import heapq
 import re
+import time
+from functools import partial
 from collections import Counter
 
 from search_engine import indexing
 from search_engine import spell_checking
+from search_engine import inexact
+from search_engine import language_model
+from search_engine import query_exp
 from search_engine.doc_sum import naive_sum
 from search_engine.utils import *
 
@@ -27,8 +32,11 @@ class SearchEngine(object):
         'soundex': f'{path_prefix}soundex.p'
     }
 
+    inexact_paths = {
+        'high_low_index': f'{path_prefix}high_low_index.p'
+    }
+
     def __init__(self, paths=None):
-        # self.scoring =  self._cosine_scoring if scoring == 'cosine' else self._okapi_scoring
         self.index_built = self._is_built(self.index_paths)
     
     def do_indexing(self, path):
@@ -40,8 +48,8 @@ class SearchEngine(object):
         self.k_gram_index = self._load_k_gram_index(self.sc_paths['k_gram_index'])
         self.soundex_index = self._load_soundex(self.sc_paths['soundex'])
 
+        self.high_low_index = self._load_high_low_index(self.inexact_paths['high_low_index'])
         self.index_built = True
-        pass
 
     def _handle_wildcards(self, raw_query):
         for word in tokenize(raw_query.lower()):
@@ -63,27 +71,58 @@ class SearchEngine(object):
         
         return errors
 
-    def answer_query(self, raw_query, top_k, scoring='okapi', summary_len=5):
-        scoring =  self._cosine_scoring if scoring == 'cosine' else self._okapi_scoring
-        query = preprocess(raw_query)
+    def _answer_inexact(self, query, top_k, scoring='okapi'):
+        doc_ids = inexact.filter_docs(query, self.high_low_index, top_k)
+        if scoring == 'lm':
+            score_fun = partial(language_model.lm_rank_documents, 
+                                smoothing='additive', param=0.1)
+        elif scoring == 'cosine':
+            score_fun = inexact.cosine_scoring_docs
+        else:
+            score_fun = inexact.okapi_scoring_docs
+        return score_fun(query, doc_ids, self.doc_lengths, self.high_low_index)
+
+    def _select_scoring_fun(self, scoring):
+        if scoring == 'lm':
+            return language_model.lm_rank_documents
+        elif scoring == 'cosine':
+            return inexact.cosine_scoring_docs
+        else:
+            return inexact.okapi_scoring_docs
+
+    def answer_query(self, raw_query, top_k, do_inexact=False, scoring='okapi', 
+                     summary_len=5, use_expansion=False, is_raw=True):
+        start_time = time.time()
+        score_fun =  self._cosine_scoring if scoring == 'cosine' else self._okapi_scoring
+        # scoring = self._select_scoring_fun(scoring)
         # count frequency
-        query = Counter(query)
+        if is_raw:
+            query = preprocess(raw_query)
+            query = Counter(query)
+            
+            wcs = self._handle_wildcards(raw_query)
+            if len(wcs) != 0:
+                print('\033[92mDid you mean:\033[0m')
+                print(*wcs, sep=', ', end='?')
+                return []
+            
+            sx = self._handle_soundex(query)
+            if len(sx) != 0:
+                print('\033[92mPossible soundex fixes:\033[0m')
+                for w, corr in sx.items():
+                    print(f'{w} -> ', end='')
+                    print(*corr, sep=', ')
+        else:
+            query = raw_query
         # retrieve all scores
 
-        wcs = self._handle_wildcards(raw_query)
-        if len(wcs) != 0:
-            print('\033[92mDid you mean:\033[0m')
-            print(*wcs, sep=', ', end='?')
-            return []
         
-        sx = self._handle_soundex(query)
-        if len(sx) != 0:
-            print('\033[92mPossible soundex fixes:\033[0m')
-            for w, corr in sx.items():
-                print(f'{w} -> ', end='')
-                print(*corr, sep=', ')
 
-        scores = scoring(query)
+        if inexact:
+            scores = self._answer_inexact(query, int(top_k / 5), scoring)
+        else:
+            scores = score_fun(query)
+
         # put them in heapq data structure, to allow convenient extraction of top k elements
         h = []
         for doc_id in scores.keys():
@@ -91,20 +130,37 @@ class SearchEngine(object):
             heapq.heappush(h, (neg_score, doc_id))
         # retrieve best matches
         top_k = min(top_k, len(h))  # handling the case when less than top k results are returned
-        print('\033[1m\033[94mANSWERING TO:', raw_query, 'METHOD:', scoring.__name__, '\033[0m')
+        if is_raw:
+            print('\033[1m\033[94mANSWERING TO:', raw_query, 'METHOD:', scoring, '\033[0m')
+        else:
+            print('\033[1m\033[94mANSWERING TO:', ' '.join(raw_query.keys()), 'METHOD:', scoring, '\033[0m')
         print(top_k, "results retrieved")
         top_k_ids = []
+        articles = []
         for k in range(top_k):
             best_so_far = heapq.heappop(h)
             top_k_ids.append(best_so_far)
-            article = naive_sum(self.documents[best_so_far[1]], raw_query, summary_len)
+            article = naive_sum(self.documents[best_so_far[1]], raw_query, summary_len, is_raw)
             article_terms = tokenize(article)
             intersection = [t for t in article_terms if is_apt_word(t) and stem(t, ps) in query.keys()]
             for term in intersection:  # highlight terms for visual evaluation
                 article = re.sub(r'(' + term + ')', r'\033[1m\033[91m\1\033[0m', article, flags=re.I)
+            articles.append(article)
+            # print("-------------------------------------------------------")
+            # print(article)
+        
+        if use_expansion:
+            id2doc = dict((k, v) for k, v in zip(top_k_ids, articles))
+            new_query = query_exp.pseudo_relevance_feedback(raw_query, id2doc, self, relevant_n=2)
+            return self.answer_query(new_query, top_k, do_inexact, scoring, summary_len, 
+                                     use_expansion=False, is_raw=False)
+
+        for article in articles:
             print("-------------------------------------------------------")
             print(article)
 
+        print("\n--- Query executed in %.7s seconds ---\n" % (time.time() - start_time))
+        
         return top_k_ids
 
     def _okapi_scoring(self, query, k1=1.2, b=0.75):
@@ -179,6 +235,13 @@ class SearchEngine(object):
             soundex = spell_checking.build_soundex_index(self.dictionary)
             self._save(soundex, path)
         return soundex
+    
+    def _load_high_low_index(self, path):
+        high_low = self._load(path)
+        if not high_low:
+            high_low = inexact.build_high_low_index(self.inv_index, 5)
+            self._save(high_low, path)
+        return high_low
     
     def _save(self, data, path):
         print(f'Saving {path}')

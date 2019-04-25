@@ -12,6 +12,7 @@ from search_engine import spell_checking
 from search_engine import inexact
 from search_engine import language_model
 from search_engine import query_exp
+from search_engine import phrases
 from search_engine.doc_sum import naive_sum
 from search_engine.utils import *
 
@@ -36,6 +37,10 @@ class SearchEngine(object):
         'high_low_index': f'{path_prefix}high_low_index.p'
     }
 
+    phrase_paths = {
+        'n_gram_index': f'{path_prefix}n_gram_index.p'
+    }
+
     def __init__(self, paths=None):
         self.index_built = self._is_built(self.index_paths)
     
@@ -49,6 +54,8 @@ class SearchEngine(object):
         self.soundex_index = self._load_soundex(self.sc_paths['soundex'])
 
         self.high_low_index = self._load_high_low_index(self.inexact_paths['high_low_index'])
+
+        self.n_gram_index = self._load_n_gram_index(self.phrase_paths['n_gram_index'])
         self.index_built = True
 
     def _handle_wildcards(self, raw_query):
@@ -91,13 +98,15 @@ class SearchEngine(object):
             return inexact.okapi_scoring_docs
 
     def answer_query(self, raw_query, top_k, do_inexact=False, scoring='okapi', 
-                     summary_len=5, use_expansion=False, is_raw=True):
+                     summary_len=5, use_expansion=False, is_raw=True, do_phrase=False):
         start_time = time.time()
         score_fun =  self._cosine_scoring if scoring == 'cosine' else self._okapi_scoring
         # scoring = self._select_scoring_fun(scoring)
         # count frequency
         if is_raw:
             query = preprocess(raw_query)
+            # ngrams_query = phrases.find_ngrams_PMI(query, 0, 1, 2)
+            # ngrams_query |= phrases.find_ngrams_PMI(query, 0, 1, 3)
             query = Counter(query)
             
             wcs = self._handle_wildcards(raw_query)
@@ -112,22 +121,27 @@ class SearchEngine(object):
                 for w, corr in sx.items():
                     print(f'{w} -> ', end='')
                     print(*corr, sep=', ')
+            
         else:
             query = raw_query
-        # retrieve all scores
 
-        
-
-        if inexact:
+        if do_inexact:
             scores = self._answer_inexact(query, int(top_k / 5), scoring)
+        elif do_phrase and is_raw:
+            _query = preprocess(raw_query)
+            ngrams_query = phrases.find_ngrams_PMI(_query, 0, 1, 2)
+            ngrams_query |= phrases.find_ngrams_PMI(_query, 0, 1, 3)
+            ngrams_query = dict((k, 1) for k in ngrams_query)
+            scores = self._cosine_scoring_phrase(ngrams_query)
         else:
             scores = score_fun(query)
 
-        # put them in heapq data structure, to allow convenient extraction of top k elements
+        
         h = []
         for doc_id in scores.keys():
             neg_score = -scores[doc_id]
             heapq.heappush(h, (neg_score, doc_id))
+        
         # retrieve best matches
         top_k = min(top_k, len(h))  # handling the case when less than top k results are returned
         if is_raw:
@@ -146,9 +160,7 @@ class SearchEngine(object):
             for term in intersection:  # highlight terms for visual evaluation
                 article = re.sub(r'(' + term + ')', r'\033[1m\033[91m\1\033[0m', article, flags=re.I)
             articles.append(article)
-            # print("-------------------------------------------------------")
-            # print(article)
-        
+        print(top_k_ids)
         if use_expansion:
             id2doc = dict((k, v) for k, v in zip(top_k_ids, articles))
             new_query = query_exp.pseudo_relevance_feedback(raw_query, id2doc, self, relevant_n=2)
@@ -204,6 +216,25 @@ class SearchEngine(object):
             scores[doc_id] /= self.doc_lengths[doc_id]
 
         return dict(scores)
+    
+    def _cosine_scoring_phrase(self, query):
+        """
+        Computes scores for all documents containing phrase from query terms
+
+        :param query: string - raw query
+        :return: dictionary of scores - doc_id:score
+        """
+        scores = Counter()
+        for term in query:
+            idf = math.log10(len(self.doc_lengths) / (len(self.n_gram_index[term]) - 1))
+            for i in range(1, len(self.n_gram_index[term])):
+                doc_id, doc_freq = self.n_gram_index[term][i]
+                scores[doc_id] += doc_freq * query[term] * idf * idf
+
+        for doc_id in scores:
+            scores[doc_id] /= self.doc_lengths[doc_id]
+
+        return dict(scores)
 
     def _is_built(self, path: dict):
         if path is None:
@@ -242,6 +273,22 @@ class SearchEngine(object):
             high_low = inexact.build_high_low_index(self.inv_index, 5)
             self._save(high_low, path)
         return high_low
+    
+    def _load_n_gram_index(self, path):
+        index = self._load(path)
+        if not index:
+            ngrams = set()
+            docs = {}
+            for doc_id, doc in self.documents.items():
+                prep_doc = preprocess(doc)
+                docs[doc_id] = prep_doc
+                n2grams = phrases.find_ngrams_PMI(prep_doc, 2, 6, 2)
+                n3grams = phrases.find_ngrams_PMI(prep_doc, 2, 12, 3)
+                ngrams = ngrams | (n2grams | n3grams)
+            
+            index = phrases.build_ngram_index(docs, ngrams)
+            self._save(index, path)
+        return index
     
     def _save(self, data, path):
         print(f'Saving {path}')

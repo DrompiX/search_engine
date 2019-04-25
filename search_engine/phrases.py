@@ -23,7 +23,6 @@ def find_ngrams_PMI(tokenized_text, freq_thresh, pmi_thresh, n):
     ngrams = finder.score_ngrams(measures.pmi)
     freqs = finder.ngram_fd
     for ngram in ngrams:
-        print(ngram[0], ngram[1], freqs[ngram[0]])
         if (ngram[1] >= pmi_thresh) and (freqs[ngram[0]] >= freq_thresh):
             result.add(ngram[0])
 

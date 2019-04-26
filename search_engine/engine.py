@@ -133,9 +133,10 @@ class SearchEngine(object):
             ngrams_query = phrases.find_ngrams_PMI(_query, 0, 1, 2)
             ngrams_query |= phrases.find_ngrams_PMI(_query, 0, 1, 3)
             ngrams_query = dict((k, 1) for k in ngrams_query)
-            scores = self._cosine_scoring_phrase(ngrams_query)
+            # scores = self._cosine_scoring(ngrams_query, self.n_gram_index)
+            scores = score_fun(ngrams_query, self.n_gram_index)
         else:
-            scores = score_fun(query)
+            scores = score_fun(query, self.inv_index)
 
         
         h = []
@@ -177,7 +178,7 @@ class SearchEngine(object):
         
         return top_k_ids
 
-    def _okapi_scoring(self, query, k1=1.2, b=0.75):
+    def _okapi_scoring(self, query, index, k1=1.2, b=0.75):
         """
         Computes scores for all documents containing any of query terms
         according to the Okapi BM25 ranking function, refer to wikipedia,
@@ -189,17 +190,17 @@ class SearchEngine(object):
         scores = Counter()
         avgdl = sum(self.doc_lengths.values()) / len(self.doc_lengths)
         for term in query:
-            if term in self.inv_index:
-                idf = math.log10(len(self.doc_lengths) / (len(self.inv_index[term]) - 1))
-                for i in range(1, len(self.inv_index[term])):
-                    doc_id, doc_freq = self.inv_index[term][i]
+            if term in index:
+                idf = math.log10(len(self.doc_lengths) / (len(index[term]) - 1))
+                for i in range(1, len(index[term])):
+                    doc_id, doc_freq = index[term][i]
                     nominator = doc_freq * (k1 + 1)
                     denominator = (doc_freq + k1 * (1 - b + b * self.doc_lengths[doc_id] / avgdl))
                     scores[doc_id] += idf * nominator / denominator
         
         return dict(scores)
     
-    def _cosine_scoring(self, query):
+    def _cosine_scoring(self, query, index):
         """
         Computes scores for all documents containing any of query terms
         according to the COSINESCORE(q) algorithm from the book (chapter 6)
@@ -209,28 +210,9 @@ class SearchEngine(object):
         """
         scores = Counter()
         for term in query:
-            idf = math.log10(len(self.doc_lengths) / (len(self.inv_index[term]) - 1))
-            for i in range(1, len(self.inv_index[term])):
-                doc_id, doc_freq = self.inv_index[term][i]
-                scores[doc_id] += doc_freq * query[term] * idf * idf
-
-        for doc_id in scores:
-            scores[doc_id] /= self.doc_lengths[doc_id]
-
-        return dict(scores)
-    
-    def _cosine_scoring_phrase(self, query):
-        """
-        Computes scores for all documents containing phrase from query terms
-
-        :param query: string - raw query
-        :return: dictionary of scores - doc_id:score
-        """
-        scores = Counter()
-        for term in query:
-            idf = math.log10(len(self.doc_lengths) / (len(self.n_gram_index[term]) - 1))
-            for i in range(1, len(self.n_gram_index[term])):
-                doc_id, doc_freq = self.n_gram_index[term][i]
+            idf = math.log10(len(self.doc_lengths) / (len(index[term]) - 1))
+            for i in range(1, len(index[term])):
+                doc_id, doc_freq = index[term][i]
                 scores[doc_id] += doc_freq * query[term] * idf * idf
 
         for doc_id in scores:

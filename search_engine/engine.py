@@ -43,6 +43,7 @@ class SearchEngine(object):
 
     def __init__(self, paths=None):
         self.index_built = self._is_built(self.index_paths)
+        
     
     def do_indexing(self, path):
         if not self.index_built:
@@ -97,8 +98,8 @@ class SearchEngine(object):
         else:
             return inexact.okapi_scoring_docs
 
-    def answer_query(self, raw_query, top_k, do_inexact=False, scoring='okapi', 
-                     summary_len=5, use_expansion=False, is_raw=True, do_phrase=False):
+    def answer_query(self, raw_query, top_k, scoring='okapi', do_inexact=False, summary_len=5, 
+                     use_expansion=False, is_raw=True, do_phrase=False, print_res=True):
         start_time = time.time()
         score_fun =  self._cosine_scoring if scoring == 'cosine' else self._okapi_scoring
         # scoring = self._select_scoring_fun(scoring)
@@ -121,12 +122,12 @@ class SearchEngine(object):
                 for w, corr in sx.items():
                     print(f'{w} -> ', end='')
                     print(*corr, sep=', ')
-            
+                return []
         else:
             query = raw_query
 
         if do_inexact:
-            scores = self._answer_inexact(query, int(top_k / 5), scoring)
+            scores = self._answer_inexact(query, top_k, scoring)#int(top_k / 5), scoring)
         elif do_phrase and is_raw:
             _query = preprocess(raw_query)
             ngrams_query = phrases.find_ngrams_PMI(_query, 0, 1, 2)
@@ -160,16 +161,17 @@ class SearchEngine(object):
             for term in intersection:  # highlight terms for visual evaluation
                 article = re.sub(r'(' + term + ')', r'\033[1m\033[91m\1\033[0m', article, flags=re.I)
             articles.append(article)
-        print(top_k_ids)
+
         if use_expansion:
             id2doc = dict((k, v) for k, v in zip(top_k_ids, articles))
             new_query = query_exp.pseudo_relevance_feedback(raw_query, id2doc, self, relevant_n=2)
             return self.answer_query(new_query, top_k, do_inexact, scoring, summary_len, 
                                      use_expansion=False, is_raw=False)
 
-        for article in articles:
-            print("-------------------------------------------------------")
-            print(article)
+        if print_res:
+            for article in articles:
+                print("-------------------------------------------------------")
+                print(article)
 
         print("\n--- Query executed in %.7s seconds ---\n" % (time.time() - start_time))
         

@@ -16,8 +16,8 @@ def launch():
     search_engine.answer_query("Democratic party", 4, do_phrase=True)
     
     # exact-inexact comparison
-    search_engine.answer_query("Apple products", 5, scoring='okapi', do_inexact=False, print_res=False)
-    search_engine.answer_query("Apple products", 5, scoring='okapi', do_inexact=True, print_res=False)
+    search_engine.answer_query("Apple products", 1, scoring='okapi', do_inexact=False, print_res=False)
+    search_engine.answer_query("Apple products", 1, scoring='okapi', do_inexact=True, print_res=False)
 
     # lm scoring
     search_engine.answer_query("Democratic party", 2, do_inexact=True, scoring='lm')

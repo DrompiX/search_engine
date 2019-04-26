@@ -102,12 +102,8 @@ class SearchEngine(object):
                      use_expansion=False, is_raw=True, do_phrase=False, print_res=True):
         start_time = time.time()
         score_fun =  self._cosine_scoring if scoring == 'cosine' else self._okapi_scoring
-        # scoring = self._select_scoring_fun(scoring)
-        # count frequency
         if is_raw:
             query = preprocess(raw_query)
-            # ngrams_query = phrases.find_ngrams_PMI(query, 0, 1, 2)
-            # ngrams_query |= phrases.find_ngrams_PMI(query, 0, 1, 3)
             query = Counter(query)
             
             wcs = self._handle_wildcards(raw_query)
@@ -133,7 +129,6 @@ class SearchEngine(object):
             ngrams_query = phrases.find_ngrams_PMI(_query, 0, 1, 2)
             ngrams_query |= phrases.find_ngrams_PMI(_query, 0, 1, 3)
             ngrams_query = dict((k, 1) for k in ngrams_query)
-            # scores = self._cosine_scoring(ngrams_query, self.n_gram_index)
             scores = score_fun(ngrams_query, self.n_gram_index)
         else:
             scores = score_fun(query, self.inv_index)
